@@ -1,0 +1,971 @@
+---
+title: <span style="color:#000080; font-size:25px">Proteomics Data Analysis Sample  </span>
+author: "Seun Awoniyi"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  html_document:
+    toc: true 
+    toc_float: TRUE
+    toc_depth: 4  # upto three depths of headings (specified by #, ##, ### and ####)
+    number_sections: true  ## if you want number sections at each table   header
+    theme: united  # theme option.
+    highlight: tango  # specifies the syntax highlighting style
+    fig_caption: true
+    widgets: "nyt_home"
+    hitheme: twitter-bootstrap
+    assets:
+      css:
+        - "http://fonts.googleapis.com/css?family=Raleway:300"
+        - "http://fonts.googleapis.com/css?family=Oxygen"
+---
+<!------------------------------- styling css --------------------------------------->
+<style>
+body{
+  font-family: 'Oxygen', sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+}
+
+
+
+h1,h2,h3,h4 {
+  font-family: 'Raleway', sans-serif;
+  text-align: center;
+}
+
+.container { width: 1000px; }
+h1 {
+  background-color: #D4DAEC;
+  text-indent: 100px;
+  font-size:25px;
+}
+h4 {
+  text-indent: 100px;
+}
+
+</style>
+
+
+<!------------------------------ /styling css --------------------------------------->
+
+```{r echo=TRUE}
+pacman::p_load(rio, rafalib, pheatmap, dplyr, kableExtra, knitr, RColorBrewer,
+               ETLUtils, pheatmap, NormalyzerDE, MSnbase, data.table, sva,
+               ReactomeGSA, EnhancedVolcano, plotly, ggplot2, tidyr,
+               ggpubr, purrr, gplots, mice, VIM, UpSetR)
+```
+# Brief Information About Data
+The data used in this analysis was part of my PhD project. The data is an output of MaxQuant, a tools use for quantitative analysis of large mass-spectrometric data. B cells that was transfected with Raft-Apex2 were activated with HEL, Fab2 at different time point. Followed by mass-spectrometry analysis.
+
+Conditions compare in this analysis include:
+
+* Fab2 5min activated Vs non-activated
+* Fab2 10min activated Vs non-activated
+* Fab2 15min activated Vs non-activated
+* HEL 5min activated Vs non-activated
+* HEL 10min activated Vs non-activated
+* HEL 15min activated Vs non-activated
+* Fab2 5min activated Vs HEL 5min activated
+* Fab2 10min activated Vs HEL 10min activated
+* Fab2 15min activated Vs HEL 15min activated
+
+
+# Exploratory Data Analysis
+## Data quality check
+
+```{r echo=TRUE}
+# Read raw file
+raw = read.delim("data/proteinGroups.txt", stringsAsFactors = FALSE,
+                 colClasses = "character")
+head(raw) %>% 
+  kbl(caption = "Table") %>% 
+  kable_paper(bootstrap_options = "striped", full_width = F) %>% 
+  kable_styling(fixed_thead = T, full_width = FALSE) %>% 
+  scroll_box()
+```
+
+Filter out Potential.contaminant, Reverse and Only.identified.by.site. Also select important features.
+```{r echo=TRUE}
+# Filter out contaminants hits
+df = raw %>%
+  filter(Potential.contaminant != "+") %>%
+  filter(Reverse != "+") %>%
+  filter(Only.identified.by.site != "+")
+
+
+#select intensity columns
+df <- dplyr::select(df,Majority.protein.IDs,Gene.names, Protein.names,Unique.peptides,
+                   "Unique.peptides.NB_1", "Unique.peptides.NB_2", "Unique.peptides.NB_3",
+                   "Unique.peptides.5NA_1", "Unique.peptides.5NA_2", "Unique.peptides.5NA_3",
+                   "Unique.peptides.10NA_1", "Unique.peptides.10NA_2", "Unique.peptides.10NA_3",
+                   "Unique.peptides.15NA_1", "Unique.peptides.15NA_2", "Unique.peptides.15NA_3",
+                   "Unique.peptides.5HEL_1", "Unique.peptides.5HEL_2", "Unique.peptides.5HEL_3",
+                   "Unique.peptides.10HEL_1", "Unique.peptides.10HEL_2", "Unique.peptides.10HEL_3",
+                   "Unique.peptides.15HEL_1", "Unique.peptides.15HEL_2", "Unique.peptides.15HEL_3",
+                   "Unique.peptides.5Fab2_1", "Unique.peptides.5Fab2_2", "Unique.peptides.5Fab2_3",
+                   "Unique.peptides.10Fab2_1", "Unique.peptides.10Fab2_2", "Unique.peptides.10Fab2_3", 
+                   "Unique.peptides.15Fab2_1", "Unique.peptides.15Fab2_2", "Unique.peptides.15Fab2_3",
+                   "Intensity.NB_1", "Intensity.NB_2", "Intensity.NB_3",
+                   "Intensity.5NA_1", "Intensity.5NA_2", "Intensity.5NA_3",
+                   "Intensity.10NA_1", "Intensity.10NA_2", "Intensity.10NA_3",
+                   "Intensity.15NA_1", "Intensity.15NA_2", "Intensity.15NA_3",
+                   "Intensity.5HEL_1", "Intensity.5HEL_2", "Intensity.5HEL_3",
+                   "Intensity.10HEL_1", "Intensity.10HEL_2", "Intensity.10HEL_3",
+                   "Intensity.15HEL_1", "Intensity.15HEL_2", "Intensity.15HEL_3",
+                   "Intensity.5Fab2_1", "Intensity.5Fab2_2", "Intensity.5Fab2_3",
+                   "Intensity.10Fab2_1", "Intensity.10Fab2_2", "Intensity.10Fab2_3",
+                   "Intensity.15Fab2_1", "Intensity.15Fab2_2", "Intensity.15Fab2_3",
+                   Unique.peptides, Reverse, Potential.contaminant, Mol..weight..kDa.
+)
+```
+
+
+Only proteins that are identified with unique peptides > 2 are considered.
+```{r echo=TRUE}
+#filter out  <2 unique peptide
+df <- filter(df, Unique.peptides > 1) %>%
+  arrange(Gene.names)
+```
+
+After MaxQuant run, __2636 proteins__ were identified.
+```{r echo=TRUE}
+print(nrow(raw) )
+```
+
+This was trimmed down to __2243 proteins__ after removing potential contaminants, proteins only identified by site, by reverse and proteins only identified with < 2 unique peptides.
+
+```{r echo=TRUE}
+#converts some columns to numeric
+df[,4:67] <- sapply(df[,4:67], as.numeric)
+
+#log transform intensity columns
+df[,35:64] <- log2(df[,35:64])
+
+#convert infinite to NA
+df[mapply(is.infinite, df)] <- NA
+
+df <- dplyr::select(df, Majority.protein.IDs, Gene.names, Protein.names, Unique.peptides,
+                 "Intensity.NB_1", "Intensity.NB_2", "Intensity.NB_3",
+                 "Intensity.5NA_1", "Intensity.5NA_2", "Intensity.5NA_3",
+                 "Intensity.10NA_1", "Intensity.10NA_2", "Intensity.10NA_3",
+                 "Intensity.15NA_1", "Intensity.15NA_2", "Intensity.15NA_3",
+                 "Intensity.5HEL_1", "Intensity.5HEL_2", "Intensity.5HEL_3",
+                 "Intensity.10HEL_1", "Intensity.10HEL_2", "Intensity.10HEL_3",
+                 "Intensity.15HEL_1", "Intensity.15HEL_2", "Intensity.15HEL_3",
+                 "Intensity.5Fab2_1", "Intensity.5Fab2_2", "Intensity.5Fab2_3",
+                 "Intensity.10Fab2_1", "Intensity.10Fab2_2", "Intensity.10Fab2_3",
+                 "Intensity.15Fab2_1", "Intensity.15Fab2_2", "Intensity.15Fab2_3",
+                 Unique.peptides, Reverse, Potential.contaminant, Mol..weight..kDa.
+)
+```
+
+
+In "Majority.protein.IDs" column, some of the protein IDs for a specific protein are more than one. These multiple IDs are separated by semicolon. I need to chose only the first ID and discard the ones after semicolon.
+
+```{r echo=TRUE}
+#chhose first ID before semicolon
+df$Majority.protein.IDs <- as.character(df$Majority.protein.IDs)
+df$Majority.protein.IDs <- sub(';.*',"", df$Majority.protein.IDs)
+```
+
+
+
+### Intersections
+Upset plot was then used to display intersection among different conditions of the identified proteins.
+
+```{r echo=TRUE}
+Non_Activated <- rep(1, length(df$Majority.protein.IDs))
+Non_Activated[rowSums(is.na(df[8:16])) > 8] = 0
+
+HEL_Act_5min <- rep(1, length(df$Majority.protein.IDs))
+HEL_Act_5min[rowSums(is.na(df[17:19])) > 2] = 0
+
+HEL_Act_10min <- rep(1, length(df$Majority.protein.IDs))
+HEL_Act_10min[rowSums(is.na(df[20:22])) > 2] = 0
+
+HEL_Act_15min <- rep(1, length(df$Majority.protein.IDs))
+HEL_Act_15min[rowSums(is.na(df[23:25])) > 2] = 0
+
+fab_Act_5min <- rep(1, length(df$Majority.protein.IDs))
+fab_Act_5min[rowSums(is.na(df[26:28])) > 2] = 0
+
+fab_Act_10min <- rep(1, length(df$Majority.protein.IDs))
+fab_Act_10min[rowSums(is.na(df[29:31])) > 2] = 0
+
+fab_Act_15min <- rep(1, length(df$Majority.protein.IDs))
+fab_Act_15min[rowSums(is.na(df[32:34])) > 2] = 0
+
+data_upset <- data.frame(df, Non_Activated, HEL_Act_5min, HEL_Act_10min, HEL_Act_15min,
+                      fab_Act_5min, fab_Act_10min, fab_Act_15min) %>%
+  dplyr::select(Gene.names, Majority.protein.IDs, Non_Activated, HEL_Act_5min,
+                HEL_Act_10min, HEL_Act_15min, fab_Act_5min, fab_Act_10min, fab_Act_15min) %>%
+  rename("Non-Activated"="Non_Activated", "HEL-5min"="HEL_Act_5min", "HEL-10min"="HEL_Act_10min",
+         "HEL-15min"="HEL_Act_15min", "Fab2-5min"="fab_Act_5min", "Fab2-10min"="fab_Act_10min",
+         "Fab2-15min"="fab_Act_15min")
+upSet <- upset(data_upset, sets = c("Non-Activated", "Fab2-5min", "Fab2-10min", "Fab2-15min",
+                              "HEL-5min", "HEL-10min", "HEL-15min"),
+             keep.order= TRUE ,number.angles = 30, point.size = 2,
+             line.size = 0.5,  mb.ratio = c(0.60, 0.40),order.by = "freq",
+             mainbar.y.label = "Protein hits intersection", sets.x.label = "Protein hits per conditions",
+             text.scale = c(1.3, 1.3, 1, 1, 2, 0.9))
+
+upSet
+
+```
+
+
+Ensure that a protein has one intensity value per condition. Then ensure that the amount of NA per row is not greater that 14.
+```{r echo=TRUE}
+conf_df=subset(df,rowSums(is.na(df[8:16])) < 8 | rowSums(is.na(df[17:19])) < 2 |
+               rowSums(is.na(df[20:22])) < 2 | rowSums(is.na(df[23:25])) < 2 |
+               rowSums(is.na(df[26:28])) < 2 | rowSums(is.na(df[29:31])) < 2 |
+               rowSums(is.na(df[32:34])) < 2 )#at least 2 in one condition
+
+
+
+conf_df=subset(conf_df, rowSums(is.na(conf_df[8:34])) < 14)#1 out of 3
+
+row.names(conf_df) = conf_df$Majority.protein.IDs
+gene_name <- conf_df$Gene.names
+
+#remove some columns
+conf_df <- conf_df %>% dplyr::select(-c("Majority.protein.IDs", "Gene.names", "Protein.names", "Unique.peptides", 
+                             "Intensity.NB_1", "Intensity.NB_2", "Intensity.NB_3", 
+                             "Reverse", "Potential.contaminant", "Mol..weight..kDa."))
+#rename columns
+colnames(conf_df) <- c("5NA_1", "5NA_2", "5NA_3", "10NA_1", 
+                    "10NA_2", "10NA_3", "15NA_1", "15NA_2", 
+                    "15NA_3", "5HEL_1", "5HEL_2", "5HEL_3", 
+                    "10HEL_1", "10HEL_2", "10HEL_3", 
+                    "15HEL_1", "15HEL_2", "15HEL_3", 
+                    "5Fab2_1", "5Fab2_2", "5Fab2_3", 
+                    "10Fab2_1", "10Fab2_2", "10Fab2_3", 
+                    "15Fab2_1", "15Fab2_2", "15Fab2_3")
+
+my_label <- c("NA_", "NA_", "NA_", "NA_",
+              "NA_", "NA_", "NA_", "NA_",
+              "NA_", "5HEL", "5HEL", "5HEL",
+              "10HEL", "10HEL", "10HEL",
+              "15HEL", "15HEL", "15HEL",
+              "5Fab2", "5Fab2", "5Fab2",
+              "10Fab2", "10Fab2", "10Fab2",
+              "15Fab2", "15Fab2", "15Fab2")
+
+my_label2 <- c("5NA", "5NA", "5NA", "10NA",
+              "10NA", "10NA", "15NA", "15NA",
+              "15NA", "5HEL", "5HEL", "5HEL",
+              "10HEL", "10HEL", "10HEL",
+              "15HEL", "15HEL", "15HEL",
+              "5Fab2", "5Fab2", "5Fab2",
+              "10Fab2", "10Fab2", "10Fab2",
+              "15Fab2", "15Fab2", "15Fab2")
+
+# my_label2 <- c("5NA_1", "5NA_2", "5NA_3", "10NA_1", 
+#                     "10NA_2", "10NA_3", "15NA_1", "15NA_2", 
+#                     "15NA_3", "5HEL_1", "5HEL_2", "5HEL_3", 
+#                     "10HEL_1", "10HEL_2", "10HEL_3", 
+#                     "15HEL_1", "15HEL_2", "15HEL_3", 
+#                     "5Fab2_1", "5Fab2_2", "5Fab2_3", 
+#                     "10Fab2_1", "10Fab2_2", "10Fab2_3", 
+#                     "15Fab2_1", "15Fab2_2", "15Fab2_3")
+
+```
+
+
+
+### Check missing values
+In total there are 27 conditions. To be less stringent, I had allowed max. 13 missing values per row.  The plots below were used to evaluate the amount of missing values present in this data.
+<br/>
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+md.pattern(conf_df) %>% kbl(caption = "Table1 : Table of number of missing values per column. It also provides how many 
+rows have this number of missing values (left column)") %>% 
+  kable_paper(bootstrap_options = "striped", full_width = F) %>% 
+  kable_styling(fixed_thead = T) %>% 
+  scroll_box(width = "800px", height = "450px")
+```
+<br/>
+
+
+```{r echo=TRUE, fig.height=20, fig.width=15, message=FALSE, warning=FALSE}
+ #From VIM package aggr function helps rank the variables in decreasing order of missing values. 
+# e.g variable ca has the highest amount of missing values.
+mice_plot <- aggr(conf_df, col = c("green","blue"),
+                    numbers=TRUE, sortVars = TRUE,
+                    labels = names(conf_df), cex.axis = .7,
+                    gap = 3, ylab = c("Missing data","Pattern")) # (VIM) display graphically missing values
+```
+In the heat map on right side of the above plot, blue represents missing value while green represents non-missing value.
+
+__Note:__ I did not notice any striking pattern in the above evaluation of missing values across conditions. As a result i did not take any action regarding this.
+
+
+## Missing imputation and Normalization
+
+Data was normalized using CycLoess (from NormalyzerDE) and missing values were imputed using kNN (nearest neighbor = 3).
+Both MDS plot and Hierarchical cluster plot were used to evaluate similarities among samples before and after importation.
+
+### MDS and Hierarchical cluster before normalization and imputation
+
+```{r echo=TRUE}
+myplclust(hclust(dist(t(conf_df))), labels = my_label2, 
+          lab.col = as.fumeric(as.character(my_label2)))
+```
+
+> MSD plot
+
+```{r echo=TRUE}
+group <- factor(as.character(my_label2))
+d <- dist(t(conf_df))
+mds <- cmdscale(d)
+mypar()
+plot(mds[,1], mds[,2], bg = as.numeric(group),pch = 21,
+     xlab="First dimension",ylab="Second dimension")
+#legend("bottomleft",levels(group), col=seq(along=levels(group)),pch=15, text.width = 9, ncol = 3)
+text(mds[,1], mds[,2], labels = group, cex= 0.6, pos=2)
+```
+
+
+```{r echo=TRUE}
+group <- factor(as.character(my_label2))
+d <- dist(t(conf_df))
+mds <- cmdscale(d, k = 4)
+mypar()
+plot(mds[,3], mds[,4],bg = as.numeric(group),pch=21,
+     xlab="Third dimension",ylab="Forth dimension")
+#legend("bottomleft",levels(group), col=seq(along=levels(group)),pch=15, text.width = 9, ncol = 3)
+text(mds[,3], mds[,4], labels = group, cex= 0.6, pos=2)
+```
+From the above MSD plot, it seems the data clustered mostly based on days of experiments.
+<br/>
+
+__Note__ K was chosen using Elbow method.
+```{r echo=TRUE}
+#####Imputation kNN
+conf_df$Uniprot = row.names(conf_df)
+dat_impt=readMSnSet2(conf_df, ecol= 1:27, fnames = "Uniprot")#msnset mode
+
+knn_imputation <- impute(dat_impt, "knn")#imputation
+knn_imputation <- data.frame(knn_imputation)%>%t()%>%data.frame()#transpose
+knn_imputation$Uniprot <- rownames(knn_imputation)#make rowname columns
+#rio::export(knn_imputation, "data_imp.txt")
+```
+
+
+```{r include=FALSE}
+data_impt <- import("data_imp.txt")
+```
+
+### Hierarchical cluster after imputation
+```{r echo=FALSE}
+myplclust(hclust(dist(t(data_impt[, 1:27]))), labels = my_label2, 
+          lab.col = as.fumeric(as.character(my_label2)))
+```
+
+
+```{r echo=TRUE}
+group <- factor(as.character(my_label2))
+d <- dist(t(data_impt[, 1:27]))
+mds <- cmdscale(d)
+mypar()
+plot(mds[,1],mds[,2],bg=as.numeric(group),pch=21,
+     xlab="First dimension",ylab="Second dimension")
+#legend("bottomleft",levels(group), col=seq(along=levels(group)),pch=15, text.width = 9, ncol = 3)
+text(mds[,1],mds[,2], labels=group, cex= 0.6, pos=2)
+```
+
+After imputation, samples still seems to cluster based on days of experiments.
+<br/>
+
+NormalyzerDE R package was used to select the best normalization method for this data. The best normalization method is CycLoess
+```{r echo=TRUE}
+#Normalization
+dataFp <- "~/Desktop/APEX2_project2/data_imp.txt"
+designFp <- "~/Desktop/APEX2_project2/design.txt"
+outDir <- "~/Desktop/APEX2_project2"
+normalyzer(jobName="quick_analysis", noLogTransform= TRUE, designPath=designFp, 
+           dataPath=dataFp, outputDir=outDir)
+
+```
+
+### MDS and Hierarchical cluster after imputation and  Normalization
+```{r echo=TRUE}
+norm_df <- import("~/Desktop/APEX2_project2/quick_analysis/CycLoess-normalized.txt")
+myplclust(hclust(dist(t(norm_df[, 2:28]))), labels = my_label2, 
+          lab.col = as.fumeric(as.character(my_label2)))
+```
+
+> MDS plot
+
+```{r echo=TRUE}
+d <- dist(t(norm_df[, 2:28]))
+mds <- cmdscale(d)
+mypar()
+plot(mds[,1],mds[,2],bg=as.numeric(group), pch=21,
+     xlab="First dimension",ylab="Second dimension")
+#legend("topleft",levels(group),col=seq(along=levels(group)),pch=15, text.width = 4, ncol = 3)
+text(mds[,1],mds[,2], labels=group, cex= 0.6, pos=2)
+```
+
+
+
+```{r echo=TRUE}
+d <- dist(t(norm_df[, 2:28]))
+mds <- cmdscale(d, k = 4)
+mypar()
+plot(mds[,3],mds[,4],bg=as.numeric(group), pch=21,
+     xlab="Third dimension",ylab="Forth dimension")
+#legend("topleft",levels(group),col=seq(along=levels(group)),pch=15, text.width = 4, ncol = 3)
+text(mds[,3],mds[,4], labels=group, cex= 0.6, pos=2)
+```
+After normalization, samples start to cluster based on replicates
+<br/>
+<br/>
+
+   
+## Batch correction
+To remove batch effect I tried 3 different methods, Linear regression and SVA.
+
+### Linear regression
+
+```{r echo=TRUE}
+design = read.delim("~/Desktop/APEX2_project2/design_batch.txt")
+row.names(design) = design$sample
+
+mod = model.matrix(~as.factor(group)+ as.factor(Batch),data=design)
+fit = lm.fit(mod,t(norm_df[2:28]))
+
+
+fitted_values <- fit[["fitted.values"]]
+data_batchCor_linear <- t(fitted_values)
+data_batchCor_linear <- data.frame(data_batchCor_linear)
+data_batchCor_linear$Uniprot <- norm_df$Uniprot
+```
+
+```{r echo=TRUE}
+myplclust(hclust(dist(t(data_batchCor_linear[,1:27]))), labels = my_label2, 
+          lab.col = as.fumeric(as.character(my_label2)))
+```
+
+> MDS plot
+
+```{r echo=TRUE}
+group <- factor(as.character(my_label))
+d <- dist(t(data_batchCor_linear[,1:27]))       
+mds <- cmdscale(d, k = 4)
+mypar()
+plot(mds[,1],mds[,2],bg=as.numeric(group),pch=21,
+     xlab="First dimension",ylab="Second dimension")
+text(mds[,1],mds[,2], labels=group, cex= 0.6, pos=2)
+#legend("topright",levels(group),col=seq(along=levels(group)), pch=15, text.width = 4, ncol = 3)
+#legend("topleft",levels(group),col=seq(along=levels(group)),pch=15, text.width = 4, ncol = 3)
+
+```
+
+```{r echo=TRUE}
+group <- factor(as.character(my_label))
+d <- dist(t(data_batchCor_linear[,1:27]))
+mds <- cmdscale(d, k = 4)
+mypar()
+plot(mds[,3],mds[,4],bg= as.numeric(group),pch=21,
+     xlab="Third dimension",ylab="forth dimension")
+text(mds[,3],mds[,4], labels=group, cex= 0.6, pos = 2)
+#legend("bottomright",levels(group),col=seq(along=levels(group)), pch=15, text.width = 4, ncol = 3)
+#legend("topleft",levels(group),col=seq(along=levels(group)),pch=15, text.width = 4, ncol = 3)
+
+```
+
+
+### SVA
+
+```{r echo=TRUE}
+row.names(norm_df) = norm_df$Uniprot
+norm_df2 <- norm_df[, 2:28]
+mod = model.matrix(~group,data = design)
+mod0 = model.matrix(~1, data = design)
+sva1 = sva(data.matrix(norm_df2), mod, mod0, n.sv = 2)
+summary(lm(sva1$sv ~ design$Batch))
+```
+
+
+```{r echo=TRUE}
+modsv = cbind(mod, sva1$sv)
+fitsv = lm.fit(modsv, t(data.matrix(norm_df2)))
+
+fitted_values <- fitsv[["fitted.values"]]
+data_batchCor_sva <- t(fitted_values)
+```
+
+
+
+```{r echo=TRUE}
+myplclust(hclust(dist(t(data_batchCor_sva))), labels = my_label2, lab.col = as.fumeric(as.character(my_label)))
+```
+
+> MDS plot
+
+```{r echo=TRUE}
+group <- factor(as.character(my_label2))
+d <- dist(t(data_batchCor_sva))
+mds <- cmdscale(d, k = 4)
+mypar()
+plot(mds[,1],mds[,2],bg = as.numeric(group), pch = 21,
+     xlab="First dimension",ylab="Second dimension")
+text(mds[,1],mds[,2], labels=group, cex= 0.6, pos = 2)
+#legend("topright",levels(group),col=seq(along=levels(group)), pch=15, text.width = 4, ncol = 3)
+```
+
+```{r echo=TRUE}
+group <- factor(as.character(my_label2))
+d <- dist(t(data_batchCor_sva))
+mds <- cmdscale(d, k = 4)
+mypar()
+plot(mds[,3],mds[,4],bg=as.numeric(group),pch=21,
+     xlab="Third dimension",ylab="Forth dimension")
+text(mds[,3],mds[,4], labels=group, cex= 0.6, pos=2)
+#legend("topleft",levels(group),col=seq(along=levels(group)), pch=15, text.width = 4, ncol = 3)
+```
+
+
+
+```{r echo=TRUE}
+data_batchCor_sva <- data.frame(data_batchCor_sva)
+
+data_batchCor_sva$Uniprot = row.names(data_batchCor_sva)
+
+#rio::export(data_batchCor_sva, "data_batchCor_sva.txt")
+
+```
+
+I then performed differential expression analysis using Limma after batch correct.
+
+```{r}
+sessionInfo()
+```
+
+
+<!-- # Differential Expression (DE) Analysis -->
+<!-- For DE, SVA corrected data was used. Limma from NormalizerDE package was used for DE analysis. -->
+
+<!-- I set significant to be Adj. Pvalue < 0.05 and fold change > 1.5. -->
+<!-- ```{r echo=TRUE} -->
+<!-- normMatrixPath <- "~/Desktop/APEX2_project2/data_batchCor_sva.txt" -->
+<!-- normalyzerDE("batchcorrected_norm", designFp, normMatrixPath, outputDir=outDir, comparisons=c("HEL_5min-Non_Act", -->
+<!--                                                                                               "HEL_10min-Non_Act", -->
+<!--                                                                                               "HEL_15min-Non_Act", -->
+<!--                                                                                               "Fab2_5min-Non_Act", -->
+<!--                                                                                               "Fab2_10min-Non_Act", -->
+<!--                                                                                               "Fab2_15min-Non_Act", -->
+<!--                                                                                               "Fab2_5min-HEL_5min", -->
+<!--                                                                                               "Fab2_10min-HEL_10min", -->
+<!--                                                                                               "Fab2_15min-HEL_15min" -->
+<!--                                                                                               ), -->
+<!--              condCol="group") -->
+<!-- ``` -->
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data <- import("~/Desktop/APEX2_project2/batchcorrected_norm/batchcorrected_norm_stats.tsv") -->
+<!-- anno <- conf_df[, 1:3] -->
+<!-- DE_data_anno <- merge(anno, DE_data, by.x = "Majority.protein.IDs", by.y = "Uniprot") -->
+<!-- #rio::export(DE_data_anno, "DE_data_anno.xlsx") -->
+<!-- DE_data_anno <- rio::import("DE_data_anno.xlsx") -->
+<!-- ``` -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- pal <- c("blue", "orange") -->
+<!-- ``` -->
+
+<!-- <div class = "row"> -->
+<!-- <div class = "col-md-9"> -->
+<!-- ```{r echo=TRUE, message=FALSE, warning=FALSE} -->
+
+<!-- DE_data_anno['HEL_5min_Non_Act'] <- "Not significant" -->
+<!-- DE_data_anno[which(DE_data_anno$`HEL_5min-Non_Act_AdjPVal` < 0.05 & abs(DE_data_anno$`HEL_5min-Non_Act_log2FoldChange`) > 1.5), "HEL_5min_Non_Act"] <- "Significant" -->
+
+<!-- plot_ly(DE_data_anno, -->
+<!--         x = DE_data_anno$`HEL_5min-Non_Act_log2FoldChange`, -->
+<!--         y = (-log(DE_data_anno$`HEL_5min-Non_Act_AdjPVal`)), -->
+<!--         text = ~paste('</br> Gene name : ', DE_data_anno$Gene.names, -->
+<!--                       '</br> Adj. Pvalue : ', DE_data_anno$`HEL_5min-Non_Act_AdjPVal`, -->
+<!--                       '</br> FC : ', DE_data_anno$`HEL_5min-Non_Act_log2FoldChange`), -->
+<!--         color = DE_data_anno$HEL_5min_Non_Act, -->
+<!--         colors = pal) %>% -->
+<!--           layout(title = 'Volcano plot of HEL_5min Vs Non_Act', -->
+<!--                  xaxis= list(title = 'Log2 Fold change'), -->
+<!--                  yaxis= list(title = '-Log10 Adj-Pvalue') -->
+<!--         ) -->
+<!-- ``` -->
+
+
+
+<!-- </div> -->
+
+<!-- <div class = "col-md-3"> -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data_anno %>% -->
+<!--   dplyr::select(Gene.names, "HEL_5min-Non_Act_AdjPVal", "HEL_5min-Non_Act_log2FoldChange")%>% -->
+<!--   rename(HEL_5min_Non_Act_AdjPVal = "HEL_5min-Non_Act_AdjPVal", -->
+<!--          HEL_5min_Non_Act_log2FoldChange = "HEL_5min-Non_Act_log2FoldChange") %>% -->
+<!--   filter(HEL_5min_Non_Act_AdjPVal < 0.05 & abs(HEL_5min_Non_Act_log2FoldChange) > 1.5) %>% -->
+<!--   kbl(caption = "Table") %>% -->
+<!--   kable_paper(bootstrap_options = "striped", full_width = F) %>% -->
+<!--   kable_styling(fixed_thead = T, full_width = FALSE) %>% -->
+<!--   scroll_box(width = "250px", height = "400px") -->
+<!-- ``` -->
+
+<!-- </div> -->
+<!-- </div> -->
+
+
+<!-- <div class = "row"> -->
+<!-- <div class = "col-md-9"> -->
+<!-- ```{r echo=TRUE, message=FALSE, warning=FALSE} -->
+<!-- DE_data_anno['HEL_10min_Non_Act'] <- "Not significant" -->
+<!-- DE_data_anno[which(DE_data_anno$`HEL_10min-Non_Act_AdjPVal` < 0.05 & abs(DE_data_anno$`HEL_10min-Non_Act_log2FoldChange`) > 1.5), "HEL_10min_Non_Act"] <- "Significant" -->
+<!-- plot_ly(DE_data_anno, -->
+<!--         x = DE_data_anno$`HEL_10min-Non_Act_log2FoldChange`, -->
+<!--         y = (-log(DE_data_anno$`HEL_10min-Non_Act_AdjPVal`)), -->
+<!--         text = ~paste('</br> Gene name : ', DE_data_anno$Gene.names, -->
+<!--                       '</br> Adj. Pvalue : ', DE_data_anno$`HEL_10min-Non_Act_AdjPVal`, -->
+<!--                       '</br> FC : ', DE_data_anno$`HEL_10min-Non_Act_log2FoldChange`), -->
+<!--         color = DE_data_anno$HEL_10min_Non_Act, -->
+<!--         colors = pal -->
+<!--         )%>% -->
+<!--           layout(title = 'Volcano plot of HEL_10min Vs Non_Act', -->
+<!--                  xaxis= list(title = 'Log2 Fold change'), -->
+<!--                  yaxis= list(title = '-Log10 Adj-Pvalue') -->
+<!--         ) -->
+<!-- ``` -->
+
+
+<!-- </div> -->
+
+<!-- <div class = "col-md-3"> -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data_anno %>% -->
+<!--   dplyr::select(Gene.names, "HEL_10min-Non_Act_AdjPVal", "HEL_10min-Non_Act_log2FoldChange")%>% -->
+<!--   rename(HEL_10min_Non_Act_AdjPVal = "HEL_10min-Non_Act_AdjPVal", -->
+<!--          HEL_10min_Non_Act_log2FoldChange = "HEL_10min-Non_Act_log2FoldChange") %>% -->
+<!--   filter(HEL_10min_Non_Act_AdjPVal < 0.05 & abs(HEL_10min_Non_Act_log2FoldChange) > 1.5) %>% -->
+<!--   kbl(caption = "Table") %>% -->
+<!--   kable_paper(bootstrap_options = "striped", full_width = F) %>% -->
+<!--   kable_styling(fixed_thead = T, full_width = FALSE) %>% -->
+<!--   scroll_box(width = "250px", height = "400px") -->
+<!-- ``` -->
+
+<!-- </div> -->
+<!-- </div> -->
+
+
+
+<!-- <div class = "row"> -->
+<!-- <div class = "col-md-9"> -->
+<!-- ```{r echo=TRUE, message=FALSE, warning=FALSE} -->
+<!-- DE_data_anno['HEL_15min_Non_Act'] <- "Not significant" -->
+<!-- DE_data_anno[which(DE_data_anno$`HEL_15min-Non_Act_AdjPVal` < 0.05 & abs(DE_data_anno$`HEL_15min-Non_Act_log2FoldChange`) > 1.5), "HEL_15min_Non_Act"] <- "Significant" -->
+<!-- plot_ly(DE_data_anno, -->
+<!--         x = DE_data_anno$`HEL_15min-Non_Act_log2FoldChange`, -->
+<!--         y = (-log(DE_data_anno$`HEL_15min-Non_Act_AdjPVal`)), -->
+<!--         text = ~paste('</br> Gene name : ', DE_data_anno$Gene.names, -->
+<!--                       '</br> Adj. Pvalue : ', DE_data_anno$`HEL_15min-Non_Act_AdjPVal`, -->
+<!--                       '</br> FC : ', DE_data_anno$`HEL_15min-Non_Act_log2FoldChange`), -->
+<!--         color = DE_data_anno$HEL_15min_Non_Act, -->
+<!--         colors = pal -->
+<!--         )%>% -->
+<!--           layout(title = 'Volcano plot of HEL_15min Vs Non_Act', -->
+<!--                  xaxis= list(title = 'Log2 Fold change'), -->
+<!--                  yaxis= list(title = '-Log15 Adj-Pvalue') -->
+<!--         ) -->
+<!-- ``` -->
+
+
+<!-- </div> -->
+
+<!-- <div class = "col-md-3"> -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data_anno %>% -->
+<!--   dplyr::select(Gene.names, "HEL_15min-Non_Act_AdjPVal", "HEL_15min-Non_Act_log2FoldChange")%>% -->
+<!--   rename(HEL_15min_Non_Act_AdjPVal = "HEL_15min-Non_Act_AdjPVal", -->
+<!--          HEL_15min_Non_Act_log2FoldChange = "HEL_15min-Non_Act_log2FoldChange") %>% -->
+<!--   filter(HEL_15min_Non_Act_AdjPVal < 0.05 & abs(HEL_15min_Non_Act_log2FoldChange) > 1.5) %>% -->
+<!--   kbl(caption = "Table") %>% -->
+<!--   kable_paper(bootstrap_options = "striped", full_width = F) %>% -->
+<!--   kable_styling(fixed_thead = T, full_width = FALSE) %>% -->
+<!--   scroll_box(width = "250px", height = "400px") -->
+<!-- ``` -->
+
+<!-- </div> -->
+<!-- </div> -->
+
+
+
+<!-- <div class = "row"> -->
+<!-- <div class = "col-md-9"> -->
+
+<!-- ```{r echo=TRUE, message=FALSE, warning=FALSE} -->
+
+<!-- DE_data_anno['Fab2_5min_Non_Act'] <- "Not significant" -->
+<!-- DE_data_anno[which(DE_data_anno$`Fab2_5min-Non_Act_AdjPVal` < 0.05 & abs(DE_data_anno$`Fab2_5min-Non_Act_log2FoldChange`) > 1.5), "Fab2_5min_Non_Act"] <- "Significant" -->
+
+<!-- plot_ly(DE_data_anno, -->
+<!--         x = DE_data_anno$`Fab2_5min-Non_Act_log2FoldChange`, -->
+<!--         y = (-log(DE_data_anno$`Fab2_5min-Non_Act_AdjPVal`)), -->
+<!--         text = ~paste('</br> Gene name : ', DE_data_anno$Gene.names, -->
+<!--                       '</br> Adj. Pvalue : ', DE_data_anno$`Fab2_5min-Non_Act_AdjPVal`, -->
+<!--                       '</br> FC : ', DE_data_anno$`Fab2_5min-Non_Act_log2FoldChange`), -->
+<!--         color = DE_data_anno$Fab2_5min_Non_Act, -->
+<!--         colors = pal) %>% -->
+<!--           layout(title = 'Volcano plot of Fab2_5min Vs Non_Act', -->
+<!--                  xaxis= list(title = 'Log2 Fold change'), -->
+<!--                  yaxis= list(title = '-Log10 Adj-Pvalue') -->
+<!--         ) -->
+<!-- ``` -->
+
+
+
+<!-- </div> -->
+
+<!-- <div class = "col-md-3"> -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data_anno %>% -->
+<!--   dplyr::select(Gene.names, "Fab2_5min-Non_Act_AdjPVal", "Fab2_5min-Non_Act_log2FoldChange")%>% -->
+<!--   rename(Fab2_5min_Non_Act_AdjPVal = "Fab2_5min-Non_Act_AdjPVal", -->
+<!--          Fab2_5min_Non_Act_log2FoldChange = "Fab2_5min-Non_Act_log2FoldChange") %>% -->
+<!--   filter(Fab2_5min_Non_Act_AdjPVal < 0.05 & abs(Fab2_5min_Non_Act_log2FoldChange) > 1.5) %>% -->
+<!--   kbl(caption = "Table") %>% -->
+<!--   kable_paper(bootstrap_options = "striped", full_width = F) %>% -->
+<!--   kable_styling(fixed_thead = T, full_width = FALSE) %>% -->
+<!--   scroll_box(width = "250px", height = "400px") -->
+<!-- ``` -->
+
+<!-- </div> -->
+<!-- </div> -->
+
+
+
+
+<!-- <div class = "row"> -->
+<!-- <div class = "col-md-9"> -->
+<!-- ```{r echo=TRUE, message=FALSE, warning=FALSE} -->
+
+<!-- DE_data_anno['Fab2_10min_Non_Act'] <- "Not significant" -->
+<!-- DE_data_anno[which(DE_data_anno$`Fab2_10min-Non_Act_AdjPVal` < 0.05 & abs(DE_data_anno$`Fab2_10min-Non_Act_log2FoldChange`) > 1.5), "Fab2_10min_Non_Act"] <- "Significant" -->
+
+<!-- plot_ly(DE_data_anno, -->
+<!--         x = DE_data_anno$`Fab2_10min-Non_Act_log2FoldChange`, -->
+<!--         y = (-log(DE_data_anno$`Fab2_10min-Non_Act_AdjPVal`)), -->
+<!--         text = ~paste('</br> Gene name : ', DE_data_anno$Gene.names, -->
+<!--                       '</br> Adj. Pvalue : ', DE_data_anno$`Fab2_10min-Non_Act_AdjPVal`, -->
+<!--                       '</br> FC : ', DE_data_anno$`Fab2_10min-Non_Act_log2FoldChange`), -->
+<!--         color = DE_data_anno$Fab2_10min_Non_Act, -->
+<!--         colors = pal) %>% -->
+<!--           layout(title = 'Volcano plot of Fab2_10min Vs Non_Act', -->
+<!--                  xaxis= list(title = 'Log2 Fold change'), -->
+<!--                  yaxis= list(title = '-Log10 Adj-Pvalue') -->
+<!--         ) -->
+<!-- ``` -->
+
+<!-- </div> -->
+
+<!-- <div class = "col-md-3"> -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data_anno %>% -->
+<!--   dplyr::select(Gene.names, "Fab2_10min-Non_Act_AdjPVal", "Fab2_10min-Non_Act_log2FoldChange")%>% -->
+<!--   rename(Fab2_10min_Non_Act_AdjPVal = "Fab2_10min-Non_Act_AdjPVal", -->
+<!--          Fab2_10min_Non_Act_log2FoldChange = "Fab2_10min-Non_Act_log2FoldChange") %>% -->
+<!--   filter(Fab2_10min_Non_Act_AdjPVal < 0.05 & abs(Fab2_10min_Non_Act_log2FoldChange) > 1.5) %>% -->
+<!--   kbl(caption = "Table") %>% -->
+<!--   kable_paper(bootstrap_options = "striped", full_width = F) %>% -->
+<!--   kable_styling(fixed_thead = T, full_width = FALSE) %>% -->
+<!--   scroll_box(width = "250px", height = "400px") -->
+<!-- ``` -->
+
+<!-- </div> -->
+<!-- </div> -->
+
+
+
+<!-- <div class = "row"> -->
+<!-- <div class = "col-md-9"> -->
+<!-- ```{r echo=TRUE, message=FALSE, warning=FALSE} -->
+
+<!-- DE_data_anno['Fab2_15min_Non_Act'] <- "Not significant" -->
+<!-- DE_data_anno[which(DE_data_anno$`Fab2_15min-Non_Act_AdjPVal` < 0.05 & abs(DE_data_anno$`Fab2_15min-Non_Act_log2FoldChange`) > 1.5), "Fab2_15min_Non_Act"] <- "Significant" -->
+
+<!-- plot_ly(DE_data_anno, -->
+<!--         x = DE_data_anno$`Fab2_15min-Non_Act_log2FoldChange`, -->
+<!--         y = (-log(DE_data_anno$`Fab2_15min-Non_Act_AdjPVal`)), -->
+<!--         text = ~paste('</br> Gene name : ', DE_data_anno$Gene.names, -->
+<!--                       '</br> Adj. Pvalue : ', DE_data_anno$`Fab2_15min-Non_Act_AdjPVal`, -->
+<!--                       '</br> FC : ', DE_data_anno$`Fab2_15min-Non_Act_log2FoldChange`), -->
+<!--         color = DE_data_anno$Fab2_15min_Non_Act, -->
+<!--         colors = pal) %>% -->
+<!--           layout(title = 'Volcano plot of Fab2_15min Vs Non_Act', -->
+<!--                  xaxis= list(title = 'Log2 Fold change'), -->
+<!--                  yaxis= list(title = '-Log10 Adj-Pvalue') -->
+<!--         ) -->
+<!-- ``` -->
+
+<!-- </div> -->
+
+<!-- <div class = "col-md-3"> -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data_anno %>% -->
+<!--   dplyr::select(Gene.names, "Fab2_15min-Non_Act_AdjPVal", "Fab2_15min-Non_Act_log2FoldChange")%>% -->
+<!--   rename(Fab2_15min_Non_Act_AdjPVal = "Fab2_15min-Non_Act_AdjPVal", -->
+<!--          Fab2_15min_Non_Act_log2FoldChange = "Fab2_15min-Non_Act_log2FoldChange") %>% -->
+<!--   filter(Fab2_15min_Non_Act_AdjPVal < 0.05 & abs(Fab2_15min_Non_Act_log2FoldChange) > 1.5) %>% -->
+<!--   kbl(caption = "Table") %>% -->
+<!--   kable_paper(bootstrap_options = "striped", full_width = F) %>% -->
+<!--   kable_styling(fixed_thead = T, full_width = FALSE) %>% -->
+<!--   scroll_box(width = "250px", height = "400px") -->
+<!-- ``` -->
+
+<!-- </div> -->
+<!-- </div> -->
+
+
+
+<!-- <div class = "row"> -->
+<!-- <div class = "col-md-9"> -->
+
+<!-- ```{r echo=TRUE, message=FALSE, warning=FALSE} -->
+
+<!-- DE_data_anno['Fab2_5min_HEL_5min'] <- "Not significant" -->
+<!-- DE_data_anno[which(DE_data_anno$`Fab2_5min-HEL_5min_AdjPVal` < 0.05 & abs(DE_data_anno$`Fab2_5min-HEL_5min_log2FoldChange`) > 1.5), "Fab2_5min_HEL_5min"] <- "Significant" -->
+
+<!-- plot_ly(DE_data_anno, -->
+<!--         x = DE_data_anno$`Fab2_5min-HEL_5min_log2FoldChange`, -->
+<!--         y = (-log(DE_data_anno$`Fab2_5min-HEL_5min_AdjPVal`)), -->
+<!--         text = ~paste('</br> Gene name : ', DE_data_anno$Gene.names, -->
+<!--                       '</br> Adj. Pvalue : ', DE_data_anno$`Fab2_5min-HEL_5min_AdjPVal`, -->
+<!--                       '</br> FC : ', DE_data_anno$`Fab2_5min-HEL_5min_log2FoldChange`), -->
+<!--         color = DE_data_anno$Fab2_5min_HEL_5min, -->
+<!--         colors = pal) %>% -->
+<!--           layout(title = 'Volcano plot of Fab2_5min Vs HEL_5min', -->
+<!--                  xaxis= list(title = 'Log2 Fold change'), -->
+<!--                  yaxis= list(title = '-Log10 Adj-Pvalue') -->
+<!--         ) -->
+<!-- ``` -->
+<!-- </div> -->
+
+<!-- <div class = "col-md-3"> -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data_anno %>% -->
+<!--   dplyr::select(Gene.names, "Fab2_5min-HEL_5min_AdjPVal", "Fab2_5min-HEL_5min_log2FoldChange")%>% -->
+<!--   rename(Fab2_5min_HEL_5min_AdjPVal = "Fab2_5min-HEL_5min_AdjPVal", -->
+<!--          Fab2_5min_HEL_5min_log2FoldChange = "Fab2_5min-HEL_5min_log2FoldChange") %>% -->
+<!--   filter(Fab2_5min_HEL_5min_AdjPVal < 0.05 & abs(Fab2_5min_HEL_5min_log2FoldChange) > 1.5) %>% -->
+<!--   kbl(caption = "Table") %>% -->
+<!--   kable_paper(bootstrap_options = "striped", full_width = F) %>% -->
+<!--   kable_styling(fixed_thead = T, full_width = FALSE) %>% -->
+<!--   scroll_box(width = "250px", height = "400px") -->
+<!-- ``` -->
+
+<!-- </div> -->
+<!-- </div> -->
+
+
+
+<!-- <div class = "row"> -->
+<!-- <div class = "col-md-9"> -->
+
+<!-- ```{r echo=TRUE, message=FALSE, warning=FALSE} -->
+
+<!-- DE_data_anno['Fab2_10min_HEL_10min'] <- "Not significant" -->
+<!-- DE_data_anno[which(DE_data_anno$`Fab2_10min-HEL_10min_AdjPVal` < 0.05 & abs(DE_data_anno$`Fab2_10min-HEL_10min_log2FoldChange`) > 1.5), "Fab2_10min_HEL_10min"] <- "Significant" -->
+
+<!-- plot_ly(DE_data_anno, -->
+<!--         x = DE_data_anno$`Fab2_10min-HEL_10min_log2FoldChange`, -->
+<!--         y = (-log(DE_data_anno$`Fab2_10min-HEL_10min_AdjPVal`)), -->
+<!--         text = ~paste('</br> Gene name : ', DE_data_anno$Gene.names, -->
+<!--                       '</br> Adj. Pvalue : ', DE_data_anno$`Fab2_10min-HEL_10min_AdjPVal`, -->
+<!--                       '</br> FC : ', DE_data_anno$`Fab2_10min-HEL_10min_log2FoldChange`), -->
+<!--         color = DE_data_anno$Fab2_10min_HEL_10min, -->
+<!--         colors = pal) %>% -->
+<!--           layout(title = 'Volcano plot of Fab2_10min Vs HEL_10min', -->
+<!--                  xaxis= list(title = 'Log2 Fold change'), -->
+<!--                  yaxis= list(title = '-Log10 Adj-Pvalue') -->
+<!--         ) -->
+<!-- ``` -->
+<!-- </div> -->
+
+<!-- <div class = "col-md-3"> -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data_anno %>% -->
+<!--   dplyr::select(Gene.names, "Fab2_10min-HEL_10min_AdjPVal", "Fab2_10min-HEL_10min_log2FoldChange")%>% -->
+<!--   rename(Fab2_10min_HEL_10min_AdjPVal = "Fab2_10min-HEL_10min_AdjPVal", -->
+<!--          Fab2_10min_HEL_10min_log2FoldChange = "Fab2_10min-HEL_10min_log2FoldChange") %>% -->
+<!--   filter(Fab2_10min_HEL_10min_AdjPVal < 0.05 & abs(Fab2_10min_HEL_10min_log2FoldChange) > 1.5) %>% -->
+<!--   kbl(caption = "Table") %>% -->
+<!--   kable_paper(bootstrap_options = "striped", full_width = F) %>% -->
+<!--   kable_styling(fixed_thead = T, full_width = FALSE) %>% -->
+<!--   scroll_box(width = "250px", height = "400px") -->
+<!-- ``` -->
+
+<!-- </div> -->
+<!-- </div> -->
+
+
+
+
+<!-- <div class = "row"> -->
+<!-- <div class = "col-md-9"> -->
+
+<!-- ```{r echo=TRUE, message=FALSE, warning=FALSE} -->
+
+<!-- DE_data_anno['Fab2_15min_HEL_15min'] <- "Not significant" -->
+<!-- DE_data_anno[which(DE_data_anno$`Fab2_15min-HEL_15min_AdjPVal` < 0.05 & abs(DE_data_anno$`Fab2_15min-HEL_15min_log2FoldChange`) > 1.5), "Fab2_15min_HEL_15min"] <- "Significant" -->
+
+<!-- plot_ly(DE_data_anno, -->
+<!--         x = DE_data_anno$`Fab2_15min-HEL_15min_log2FoldChange`, -->
+<!--         y = (-log(DE_data_anno$`Fab2_15min-HEL_15min_AdjPVal`)), -->
+<!--         text = ~paste('</br> Gene name : ', DE_data_anno$Gene.names, -->
+<!--                       '</br> Adj. Pvalue : ', DE_data_anno$`Fab2_15min-HEL_15min_AdjPVal`, -->
+<!--                       '</br> FC : ', DE_data_anno$`Fab2_15min-HEL_15min_log2FoldChange`), -->
+<!--         color = DE_data_anno$Fab2_15min_HEL_15min, -->
+<!--         colors = pal) %>% -->
+<!--           layout(title = 'Volcano plot of Fab2_15min Vs HEL_15min', -->
+<!--                  xaxis= list(title = 'Log2 Fold change'), -->
+<!--                  yaxis= list(title = '-Log10 Adj-Pvalue') -->
+<!--         ) -->
+<!-- ``` -->
+<!-- </div> -->
+
+<!-- <div class = "col-md-3"> -->
+
+
+<!-- ```{r echo=TRUE} -->
+<!-- DE_data_anno %>% -->
+<!--   dplyr::select(Gene.names, "Fab2_15min-HEL_15min_AdjPVal", "Fab2_15min-HEL_15min_log2FoldChange")%>% -->
+<!--   rename(Fab2_15min_HEL_15min_AdjPVal = "Fab2_15min-HEL_15min_AdjPVal", -->
+<!--          Fab2_15min_HEL_15min_log2FoldChange = "Fab2_15min-HEL_15min_log2FoldChange") %>% -->
+<!--   filter(Fab2_15min_HEL_15min_AdjPVal < 0.05 & abs(Fab2_15min_HEL_15min_log2FoldChange) > 1.5) %>% -->
+<!--   kbl(caption = "Table") %>% -->
+<!--   kable_paper(bootstrap_options = "striped", full_width = F) %>% -->
+<!--   kable_styling(fixed_thead = T, full_width = FALSE) %>% -->
+<!--   scroll_box(width = "250px", height = "400px") -->
+<!-- ``` -->
+
+<!-- </div> -->
+<!-- </div> -->
+
+
+
+
